@@ -160,4 +160,8 @@ cython_debug/
 #.idea/n
 
 secret.py
+test.ipynb
+.json
+.jsonl
+.txt
 node_modules
