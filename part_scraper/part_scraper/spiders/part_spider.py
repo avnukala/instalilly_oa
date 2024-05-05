@@ -4,8 +4,8 @@ class PartScraperSpider(scrapy.Spider):
     name = 'part_scrape'
     start_urls = [
         # "https://www.partselect.com/Pole-Saw-Models.htm"
-        # 'https://www.partselect.com/Dishwasher-Models.htm',
-        'https://www.partselect.com/Refrigerator-Models.htm'
+        'https://www.partselect.com/Dishwasher-Parts.htm',
+        'https://www.partselect.com/Refrigerator-Parts.htm'
     ]
 
 
@@ -30,9 +30,9 @@ class PartScraperSpider(scrapy.Spider):
             "Model URL": response.url,
         }
         
-        # for link in response.css('a.bold.mb-1.mega-m__part__name::attr(href)'):
-        #     part_url = response.urljoin(link.get())
-        #     yield scrapy.Request(part_url, callback=self.parse_parts_page)
+        for link in response.css('a.bold.mb-1.mega-m__part__name::attr(href)'):
+            part_url = response.urljoin(link.get())
+            yield scrapy.Request(part_url, callback=self.parse_parts_page)
         
         master_id = response.css('[data-model-master-id]::attr(data-model-master-id)').get()
         qa_url = f'{response.url}?currentPage=1&modelMasterID={master_id}&model_number={model_number}&handler=QuestionsAndAnswers&pageSize=5&sortColumn=rating&sortOrder=desc&'
@@ -82,7 +82,7 @@ class PartScraperSpider(scrapy.Spider):
         
     def parse_model_symptoms(self, response):
         model_info = response.meta['model_info']
-        symptom_title = response.css('main div.bold.mb-2::text').get()
+        symptom_title = response.css('.title-main.mt-3.mb-4::text').get()
         model_info[symptom_title] = []
         for fix in response.css('.symptoms'):
             sym_fix_rate = fix.css('.symptoms__percent span::text').get()
