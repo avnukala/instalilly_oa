@@ -19,7 +19,6 @@ from langchain_core.prompts import (ChatPromptTemplate, MessagesPlaceholder,
 from langchain_core.retrievers import BaseRetriever, RetrieverOutput
 from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.utils.function_calling import convert_to_openai_function
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from prompts import contextualize_q_system_prompt, qa_system_prompt
@@ -48,11 +47,11 @@ class VectorStoreRetrieverFilter(VectorStoreRetriever):
         if filter is not None:
             # Only similarity search is implemented for now
             docs = self.vectorstore.max_marginal_relevance_search(
-                query, filter=filter, **self.search_kwargs)
+                query, filter=filter, k=3, fetch_k=10)
         else:
             # Filter is not provided
             docs = self.vectorstore.max_marginal_relevance_search(
-                query, **self.search_kwargs)
+                query, k=3, fetch_k=10)
         return docs
 
 
