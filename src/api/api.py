@@ -1,130 +1,144 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from langchain_community.llms import Replicate
-from langgraph.graph import END, MessageGraph
-from langchain_core.messages import HumanMessage
 import os
-from secret import REPLICATE_API_KEY
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from scrape.parsing_tools import scrape_model_symptoms, solve_model_symptoms, scrape_part_install, scrape_part_info
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.agents import create_structured_chat_agent
-from langchain.agents import AgentExecutor
-from langchain.agents.format_scratchpad.tools import format_to_tool_messages
-from langchain_core.output_parsers import StrOutputParser
-from langgraph.graph import END, Graph
+import pickle
+import re
+from typing import Any, Dict, List, Union
+
+import langchain
+from fastapi import FastAPI
+from langchain.chains import (ConversationChain, RetrievalQA,
+                              create_history_aware_retriever,
+                              create_retrieval_chain)
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.docstore.document import Document
+from langchain.memory import ChatMessageHistory
+from langchain.schema import Document
+from langchain.vectorstores.base import VectorStoreRetriever
+from langchain_core.chat_history import BaseChatMessageHistory
+from langchain_core.prompts import (ChatPromptTemplate, MessagesPlaceholder,
+                                    format_document)
+from langchain_core.retrievers import BaseRetriever, RetrieverOutput
+from langchain_core.runnables import Runnable, RunnablePassthrough
+from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.utils.function_calling import convert_to_openai_function
-from langchain_core.utils.function_calling import convert_to_openai_function
-from typing import TypedDict, Annotated, Sequence
-import operator
-from langchain_core.messages import BaseMessage
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import ToolInvocation
-import json
-from langchain_core.messages import FunctionMessage
-from langgraph.prebuilt import ToolExecutor
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_pinecone import PineconeVectorStore
+from prompts import contextualize_q_system_prompt, qa_system_prompt
+from pydantic import BaseModel
+from secret import *
 
-
-
-os.environ["REPLICATE_API_TOKEN"] = REPLICATE_API_KEY
+os.environ['PINECONE_API_KEY'] = PINECONE_API_KEY
+os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
 
 app = FastAPI()
 
+# enable debugging
+# langchain.debug = True
 
-tools = [scrape_model_symptoms, solve_model_symptoms, scrape_part_install, scrape_part_info]
 
-# TODO: keep history
-# TODO: RAG
-# TODO: prompt LLM to ask for model and part number as much as possible
-# TODO: Analyze ability to answer multiple questions at once when using tools
-# llm = Replicate(
-#     model="mistralai/mistral-7b-instruct-v0.2",
-#     model_kwargs={
-#         "temperature": 0.3,
-#         "max_new_tokens": 1024,
-#         "top_p": 0.9,
-#         "prompt_template": """
-#             Always assist with care, respect, and truth. Respond with utmost utility yet securely. Avoid harmful, unethical, prejudiced or negative content. Ensure replies promote fairness and positivity. 
-#             You are a chatbot designed to help users with information related to dishwashers and refrigerators from partselect.com.
-#             DO NOT discuss anything other than dishwashers and refrigerators with the user.
-#             When necessary to provide results, please ask the customer to provide the model ID of their appliance or the part
-#             ID of the part.
-#             <s>[INST] {prompt} [/INST]"""
-#     },
-# )
+# modify retriever to pass in metadata filtering args
+# inspired by https://github.com/langchain-ai/langchain/issues/9195
+class VectorStoreRetrieverFilter(VectorStoreRetriever):
+    '''Custom vectorstore retriever with filter functionality.'''
 
-# Main Agent
-model = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
-system = """Always assist with care, respect, and truth. Respond with utmost utility yet securely. Avoid harmful, unethical, prejudiced or negative content. Ensure replies promote fairness and positivity. 
-            You are a chatbot designed to help users with information related to dishwashers and refrigerators from partselect.com.
-            DO NOT discuss anything other than dishwashers and refrigerators with the user.
-            Please ask the customer to provide the model ID of their appliance or the part ID of the part to use for the tools we have access to."""
-main_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", system),
-        ("user", "{input}")
-    ]
-)
+    def _get_relevant_documents(self, input) -> List[Document]:
+        # Filter is provided
+        print(input)
+        query = input["input"]
+        filter = input.get("filter", None)
+        if filter is not None:
+            # Only similarity search is implemented for now
+            docs = self.vectorstore.max_marginal_relevance_search(
+                query, filter=filter, **self.search_kwargs)
+        else:
+            # Filter is not provided
+            docs = self.vectorstore.max_marginal_relevance_search(
+                query, **self.search_kwargs)
+        return docs
 
-functions = [convert_to_openai_function(t) for t in tools]
-model = model.bind_functions(functions)
-tool_executor = ToolExecutor(tools)
 
-llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
-system = """You are an identified trained to figure out part / model IDs from human text. All you will do is return the number."""
-re_write_prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", system),
-        ("user", "How can I install part number PS11752778?"),
-        ("system", "PS11752778"),
-        ("user", "Is this part compatible with my WDT780SAEM1 model?"),
-        ("system", "WDT780SAEM1"),
-        ("user", {input})
-    ]
+# slightly modified version of create_retrieval_chain to allow multiple inputs
+# https://github.com/langchain-ai/langchain/blob/master/libs/langchain/langchain/chains/retrieval.py
+def create_custom_retrieval_chain(
+    retriever: Union[BaseRetriever, Runnable[dict, RetrieverOutput]],
+    combine_docs_chain: Runnable[Dict[str, Any], str],
+) -> Runnable:
+    retrieval_docs: Runnable[dict, RetrieverOutput] = retriever
+
+    retrieval_chain = (RunnablePassthrough.assign(
+        context=retrieval_docs.with_config(
+            run_name="retrieve_documents"), ).assign(
+                answer=combine_docs_chain)).with_config(
+                    run_name="retrieval_chain")
+
+    return retrieval_chain
+
+
+def load_ids():
+    relevant_ids = None
+    with open("ids.pickle", "rb") as handle:
+        relevant_ids = pickle.load(handle)
+    pattern = re.compile(r"(?=(" +
+                         '|'.join(re.escape(item)
+                                  for item in relevant_ids) + r"))")
+    return pattern
+
+
+def find_matching_ids(query, pattern):
+    matches = pattern.findall(query)
+    return list(set(matches)) if matches else None
+
+
+# match known ids against inputs
+id_match_pattern = load_ids()
+
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+embeddings = OpenAIEmbeddings(model='text-embedding-ada-002', )
+vectorstore = PineconeVectorStore(index_name="instalily-oa",
+                                  embedding=embeddings)
+index = VectorStoreRetrieverFilter(vectorstore=vectorstore)
+
+# Q/A RAG
+qa_prompt = ChatPromptTemplate.from_messages([
+    ("system", qa_system_prompt),
+    MessagesPlaceholder("chat_history"),
+    ("human", "{input}"),
+])
+
+question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+rag_chain = create_custom_retrieval_chain(index, question_answer_chain)
+store = ChatMessageHistory()
+
+
+def get_session_history(session_id: str) -> BaseChatMessageHistory:
+    return store
+
+
+final_chain = RunnableWithMessageHistory(
+    rag_chain,
+    get_session_history,
+    input_messages_key="input",
+    history_messages_key="chat_history",
+    output_messages_key="answer",
 )
 
 
 class Message(BaseModel):
     user_query: str
-    
-    
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    model_id: str
-    part_id: str
-    
-    
-workflow = Graph()
-
-def basic_agent(state):
-    messages = state['messages']
-    response = model.invoke(messages)
-    return {"messages": [response]}
-
-# basics: 
-# - model queries
-# - part queries 
-# - general Q/A
-
-
-def model_queries(state):
-    messages = state['messages']
-    last_message = messages[-1]
-    parsed_tool_input = json.loads(last_message.additional_kwargs["function_call"]["arguments"])
-    action = ToolInvocation(
-            tool=last_message.additional_kwargs["function_call"]["name"],
-            tool_input=parsed_tool_input['__arg1'],
-        )
-    response = tool_executor.invoke(action)
-    function_message = FunctionMessage(content=str(response), name=action.tool)
-    return {"messages": [function_message]}
 
 
 @app.post("/get_ai_message")
 async def get_ai_message(message: Message):
-    assistant_response = llm.invoke(message.user_query)
+    query = message.user_query
+    id_matches = find_matching_ids(query, id_match_pattern)
 
-    return {
-        "role": "assistant",
-        "content": assistant_response
-    }
+    inputs = {"input": query}
+    if id_matches: inputs["filter"] = {"id": {"$in": id_matches}}
+
+    ai_output = final_chain.invoke(
+        inputs, config={"configurable": {
+            "session_id": "fiwb"
+        }})
+    if len(store.messages) >= 3:
+        store.messages.pop(0)
+
+    return {"role": "assistant", "content": ai_output["answer"]}

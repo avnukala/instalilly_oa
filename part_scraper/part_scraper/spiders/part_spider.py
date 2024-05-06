@@ -1,5 +1,6 @@
 import scrapy
 
+
 class PartScraperSpider(scrapy.Spider):
     name = 'part_scrape'
     start_urls = [
@@ -58,30 +59,29 @@ class PartScraperSpider(scrapy.Spider):
                                 }
                             )
             
+        
     def parse_model_qa(self, response):
-        orig_info = response.meta['model_info']
         model_info = response.meta['model_info']
         base_url = response.meta['base_url']
         master_id = response.meta['master_id']
         model_number= model_info['Model Number']
         cur_page = response.meta['cur_page']
-        model_info["Questions and Answers"] = []
         
         if (response.css('.qna__question.js-qnaResponse')):
             for qa in response.css('.qna__question.js-qnaResponse'):
+                qa_info = model_info.copy()
                 question = qa.css('.js-searchKeys::text').get()
                 answer = qa.css('.qna__ps-answer__msg .js-searchKeys::text').get()
-                model_info['Questions and Answers'].append({
-                    'Question': question.strip() if question else None, 
-                    'Answer': answer.strip() if answer else None}
-                )
+                qa_info['Question'] =  question.strip() if question else None, 
+                qa_info['Answer'] =  answer.strip() if answer else None
+                yield qa_info
+                
             next_page_url =  f'{base_url}?currentPage=1&modelMasterID={master_id}&model_number={model_number}&handler=QuestionsAndAnswers&pageSize=5&sortColumn=rating&sortOrder=desc&'
             cur_page += 1
-            yield model_info
             yield scrapy.Request(next_page_url, 
                                 callback=self.parse_model_qa,
                                 meta={
-                                    'model_info': orig_info.copy(),
+                                    'model_info': model_info.copy(),
                                     'base_url': base_url,
                                     'master_id': master_id,
                                     'cur_page': cur_page
@@ -92,29 +92,34 @@ class PartScraperSpider(scrapy.Spider):
     def parse_model_symptoms(self, response):
         model_info = response.meta['model_info']
         symptom_title = response.meta['symptom_title']
-        model_info[symptom_title] = []
+        
         # two different types of symptom pages
         for fix in response.css('.symptoms'):
+            symptom_info = model_info.copy()
             sym_fix_rate = fix.css('.symptoms__percent span::text').get()
-            
-            pname_redesign = fix.css('.header.bold.d-flex.justify-content-start a::text').get()
-            part_name = pname_redesign if pname_redesign else fix.css('a.bold::text').get()
-            
-            pnum_redesign = fix.css('.bold.text-teal[itemprop="mpn"]::text').get()
-            part_number = pnum_redesign if pnum_redesign else fix.css('div.text-sm a::text').get()
-            
-            purl_redesign = fix.css('.header.bold.d-flex.justify-content-start a::attr(href)').get()
-            part_url = purl_redesign if purl_redesign else '/PS11738134-Whirlpool-W10874836-Pantry-End-Cap-Kit-LH-and-RH.htm?SourceCode=22&SearchTerm=MFI2568AES&ModelNum=MFI2568AES'
-            repair_guide = fix.css('p.mb-4::text').get()
-            solution = {
-                "Symptom Fix Rate": sym_fix_rate,
-                "Part Name": part_name,
-                "Manufacturer Part Number": part_number,
-                "Part URL": response.urljoin(part_url) if part_url else None,
-                "Repair Guide": repair_guide
-            }
-            model_info[symptom_title].append(solution)
-        yield model_info
+            # only get info on fixes that are valid more than 15% of the time
+            try: is_significant = float(sym_fix_rate[:-1]) > 15
+            except ValueError: is_significant = False
+            if is_significant:
+                pname_redesign = fix.css('.header.bold.d-flex.justify-content-start a::text').get()
+                part_name = pname_redesign if pname_redesign else fix.css('a.bold::text').get()
+                
+                pnum_redesign = fix.css('.bold.text-teal[itemprop="mpn"]::text').get()
+                part_number = pnum_redesign if pnum_redesign else fix.css('div.text-sm a::text').get()
+                
+                purl_redesign = fix.css('.header.bold.d-flex.justify-content-start a::attr(href)').get()
+                part_url = purl_redesign if purl_redesign else '/PS11738134-Whirlpool-W10874836-Pantry-End-Cap-Kit-LH-and-RH.htm?SourceCode=22&SearchTerm=MFI2568AES&ModelNum=MFI2568AES'
+                repair_guide = fix.css('p.mb-4::text').get()
+                solution = {
+                    "Appliance Problem": symptom_title,
+                    "Problem Fix Rate": sym_fix_rate,
+                    "Part Name": part_name,
+                    "Manufacturer Part Number": part_number,
+                    "Part URL": response.urljoin(part_url) if part_url else None,
+                    "Repair Guide": repair_guide
+                }
+                symptom_info.update(solution)
+                yield symptom_info
             
 
     def parse_parts_page(self, response):
@@ -141,10 +146,10 @@ class PartScraperSpider(scrapy.Spider):
             'Part URL': response.url,
             'Part Price': f'${part_price}' if part_price else None,
             'Rating': rating.strip() if rating else None,
-            'Product Description': description,
+            'Description': description,
             'Troubleshooting': tb if tb else None,
             "Related Model Number": response.meta["model_number"],
-            "Availability": "No Longer Available" if not description else "Available",
+            "Valid": "No" if not description else "Yes",
         }
         
         passed_part_info = {
@@ -153,8 +158,6 @@ class PartScraperSpider(scrapy.Spider):
             'Manufacturer': manufacturer,
             "Related Model Number": response.meta["model_number"],
             'Part Name': part_name,
-            'Part URL': response.url,
-            "Questions and Answers": [],
         }
         
         yield part_info
@@ -174,27 +177,25 @@ class PartScraperSpider(scrapy.Spider):
 
 
     def parse_parts_qa(self, response):
-        orig_info = response.meta['part_info']
+        part_info = response.meta['part_info']
         base_url = response.meta['base_url']
         inv_id = response.meta['inv_id']
         cur_page = response.meta['cur_page']
         if (response.css('.qna__question.js-qnaResponse')):
             for qa in response.css('.qna__question.js-qnaResponse'):
+                qa_info = part_info.copy()
                 question = qa.css('.js-searchKeys::text').get()
                 answer = qa.css('.qna__ps-answer__msg .js-searchKeys::text').get()
-                part_info['Questions and Answers'].append({
-                    'Question': question.strip() if question else None, 
-                    'Answer': answer.strip() if answer else None}
-                )
+                qa_info['Question'] =  question.strip() if question else None, 
+                qa_info['Answer'] =  answer.strip() if answer else None
+                yield qa_info
                 
-            
             next_page_url = f'{base_url}?currentPage={cur_page}&inventoryID={inv_id}&handler=QuestionsAndAnswers&pageSize=10&sortColumn=rating&sortOrder=desc&'
             cur_page += 1
-            yield part_info
             yield scrapy.Request(next_page_url, 
                                 callback=self.parse_parts_qa,
                                 meta={
-                                    'part_info': orig_info.copy(),
+                                    'part_info': part_info.copy(),
                                     'base_url': base_url,
                                     'inv_id': inv_id,
                                     'cur_page': cur_page, 
