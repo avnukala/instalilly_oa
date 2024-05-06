@@ -5,23 +5,20 @@ from typing import Any, Dict, List, Union
 
 import langchain
 from fastapi import FastAPI
-from langchain.chains import (ConversationChain, RetrievalQA,
-                              create_history_aware_retriever,
-                              create_retrieval_chain)
+from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.docstore.document import Document
 from langchain.memory import ChatMessageHistory
 from langchain.schema import Document
 from langchain.vectorstores.base import VectorStoreRetriever
 from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.prompts import (ChatPromptTemplate, MessagesPlaceholder,
-                                    format_document)
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.retrievers import BaseRetriever, RetrieverOutput
 from langchain_core.runnables import Runnable, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
-from prompts import contextualize_q_system_prompt, qa_system_prompt
+from prompts import qa_system_prompt
 from pydantic import BaseModel
 from secret import *
 
@@ -31,7 +28,7 @@ os.environ['OPENAI_API_KEY'] = OPENAI_API_KEY
 app = FastAPI()
 
 # enable debugging
-# langchain.debug = True
+langchain.debug = True
 
 
 # modify retriever to pass in metadata filtering args
