@@ -134,7 +134,7 @@ async def get_ai_message(message: Message):
         inputs, config={"configurable": {
             "session_id": "fiwb"
         }})
-    if len(store.messages) >= 3:
+    if len(store.messages) >= 6:
         store.messages.pop(0)
 
     return {"role": "assistant", "content": ai_output["answer"]}
