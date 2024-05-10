@@ -22,7 +22,7 @@ def num_tokens_from_string(token_stats, string: str, encoding_name: str) -> int:
 
 def get_embedding(doc):
 	response = openai_client.embeddings.create(
-    	model= "text-embedding-ada-002",
+    	model= "text-embedding-3-small",
     	input=[doc]
 	)
 	embedding = response.data[0].embedding
