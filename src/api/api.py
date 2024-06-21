@@ -45,11 +45,11 @@ class VectorStoreRetrieverFilter(VectorStoreRetriever):
         if filter is not None:
             # decided not to use MMR because returned documents should be similar
             # e.g. If we ask about part solutions, we should only get solutions
-            docs = self.vectorstore.similarity_search(query, filter=filter, k=5)
+            docs = self.vectorstore.similarity_search(query, filter=filter, k=10)
         else:
             # if no filter is provided, we should look for more diverse documents
             docs = self.vectorstore.max_marginal_relevance_search(
-                query, k=5, fetch_k=10
+                query, k=10, fetch_k=20
             )
         return docs
 
@@ -100,8 +100,8 @@ class FilterIDs:
         return list(self.filters) if self.filters else None
 
 
-llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
-summary_llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+llm = ChatOpenAI(model="gpt-4o", temperature=0)
+summary_llm = ChatOpenAI(model="gpt-4o", temperature=0)
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-small",
 )
@@ -137,7 +137,7 @@ filters = FilterIDs()
 @app.post("/get_ai_message")
 async def get_ai_message(message: Message):
     # keep sliding history window somewhat small for Q/A (prev 3 msgs)
-    if len(store.messages) >= 8:
+    if len(store.messages) >= 16:
         store.messages = store.messages[2:]
 
     query = message.user_query
